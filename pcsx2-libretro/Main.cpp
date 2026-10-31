@@ -1038,6 +1038,11 @@ static struct retro_core_option_v2_definition kOptionDefinitions[] = {
 		"Skips the BIOS boot animation.",
 		nullptr, "system",
 		{{"enabled", nullptr}, {"disabled", nullptr}, {nullptr, nullptr}}, "enabled"},
+	{"armsx2_port2", "Controller Port 2", "Controller Port 2",
+		"Plugs a DualShock 2 into the second controller port, driven by the frontend's player 2 "
+		"(libretro port 1), for local two-player games.",
+		nullptr, "system",
+		{{"disabled", nullptr}, {"enabled", nullptr}, {nullptr, nullptr}}, "disabled"},
 	{"armsx2_cheats", "Enable Cheats", "Enable Cheats",
 		"Loads .pnach cheat files from <system>/pcsx2/cheats for the running game.",
 		nullptr, "system",
@@ -1080,6 +1085,7 @@ static struct retro_variable kCoreVariables[] = {
 	{"armsx2_instant_vu1", "Instant VU1; enabled|disabled"},
 	{"armsx2_bios", "BIOS (restart); auto"},
 	{"armsx2_fast_boot", "Fast boot; enabled|disabled"},
+	{"armsx2_port2", "Controller port 2; disabled|enabled"},
 	{"armsx2_cheats", "Enable cheats; disabled|enabled"},
 	{nullptr, nullptr},
 };
@@ -1179,6 +1185,11 @@ static void ApplyCoreOptions(bool startup)
 		var = {"armsx2_fast_boot", nullptr};
 		if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
 			s_base_settings->SetBoolValue("EmuCore", "EnableFastBoot", !std::strcmp(var.value, "enabled"));
+
+		// Port 2: a DualShock 2 for player 2, or nothing (PCSX2's default).
+		var = {"armsx2_port2", nullptr};
+		if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+			s_base_settings->SetStringValue("Pad2", "Type", !std::strcmp(var.value, "enabled") ? "DualShock2" : "None");
 
 		var = {"armsx2_widescreen_patches", nullptr};
 		if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
@@ -2138,7 +2149,12 @@ RETRO_API void retro_run(void)
 	// bind slots (bypasses InputManager entirely).
 	if (VMManager::HasValidVM())
 	{
-		if (PadBase* pad = Pad::GetPad(0))
+		// Libretro port N drives PS2 port N+1 (players 1 and 2; no multitap).
+		for (unsigned port = 0; port < 2; port++)
+		{
+		PadBase* pad = Pad::GetPad(port);
+		if (!pad || pad->GetType() != Pad::ControllerType::DualShock2)
+			continue;
 		{
 			static constexpr struct
 			{
@@ -2163,17 +2179,17 @@ RETRO_API void retro_run(void)
 				{RETRO_DEVICE_ID_JOYPAD_R3, PadDualshock2::Inputs::PAD_R3},
 			};
 			for (const auto& m : bmap)
-				pad->Set(m.ds2, input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, m.retro) ? 1.0f : 0.0f);
+				pad->Set(m.ds2, input_state_cb(port, RETRO_DEVICE_JOYPAD, 0, m.retro) ? 1.0f : 0.0f);
 
 			// Analog sticks: split each axis into the two directional slots.
 			const auto axis = [](s16 v, bool positive) {
 				const float f = std::clamp(static_cast<float>(v) / 32767.0f, -1.0f, 1.0f);
 				return positive ? std::max(f, 0.0f) : std::max(-f, 0.0f);
 			};
-			const s16 lx = input_state_cb(0, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_LEFT, RETRO_DEVICE_ID_ANALOG_X);
-			const s16 ly = input_state_cb(0, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_LEFT, RETRO_DEVICE_ID_ANALOG_Y);
-			const s16 rx = input_state_cb(0, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_RIGHT, RETRO_DEVICE_ID_ANALOG_X);
-			const s16 ry = input_state_cb(0, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_RIGHT, RETRO_DEVICE_ID_ANALOG_Y);
+			const s16 lx = input_state_cb(port, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_LEFT, RETRO_DEVICE_ID_ANALOG_X);
+			const s16 ly = input_state_cb(port, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_LEFT, RETRO_DEVICE_ID_ANALOG_Y);
+			const s16 rx = input_state_cb(port, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_RIGHT, RETRO_DEVICE_ID_ANALOG_X);
+			const s16 ry = input_state_cb(port, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_RIGHT, RETRO_DEVICE_ID_ANALOG_Y);
 			pad->Set(PadDualshock2::Inputs::PAD_L_RIGHT, axis(lx, true));
 			pad->Set(PadDualshock2::Inputs::PAD_L_LEFT, axis(lx, false));
 			pad->Set(PadDualshock2::Inputs::PAD_L_DOWN, axis(ly, true));
@@ -2182,6 +2198,7 @@ RETRO_API void retro_run(void)
 			pad->Set(PadDualshock2::Inputs::PAD_R_LEFT, axis(rx, false));
 			pad->Set(PadDualshock2::Inputs::PAD_R_DOWN, axis(ry, true));
 			pad->Set(PadDualshock2::Inputs::PAD_R_UP, axis(ry, false));
+		}
 		}
 	}
 

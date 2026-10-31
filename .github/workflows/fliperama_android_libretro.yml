@@ -1,0 +1,98 @@
+name: Fliperama - Android libretro core
+
+# Fliperama: builds armsx2_libretro_android.so (arm64-v8a) the same way the
+# libretro buildbot does (.gitlab-ci.yml, .core-defs-android), on GitHub, and
+# publishes it as the "fliperama" release.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [fliperama]
+
+permissions:
+  contents: write
+
+jobs:
+  android:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      API_LEVEL: 28
+      ANDROID_ABI: arm64-v8a
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Install packages
+        run: sudo apt-get update && sudo apt-get -y install ninja-build cmake python3
+
+      - name: NDK
+        run: |
+          NDK="${ANDROID_NDK_LATEST_HOME:-$ANDROID_NDK_HOME}"
+          test -f "$NDK/build/cmake/android.toolchain.cmake"
+          echo "NDK=$NDK" >> $GITHUB_ENV
+          echo "Using NDK $NDK"
+
+      - name: Cache dependencies
+        id: cache-deps
+        uses: actions/cache@v4
+        with:
+          path: .deps
+          key: android-${{ env.ANDROID_ABI }}-deps-${{ hashFiles('.github/workflows/scripts/android/build-dependencies.sh') }}
+
+      - name: Build dependencies
+        if: steps.cache-deps.outputs.cache-hit != 'true'
+        run: |
+          ANDROID_NDK="$NDK" ANDROID_ABI="$ANDROID_ABI" ANDROID_API="$API_LEVEL" \
+            ./.github/workflows/scripts/android/build-dependencies.sh "$GITHUB_WORKSPACE/.deps"
+
+      - name: Configure
+        run: |
+          cmake -B build -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=$ANDROID_ABI \
+            -DANDROID_PLATFORM=android-$API_LEVEL \
+            -DANDROID_STL=c++_static \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="$GITHUB_WORKSPACE/.deps" \
+            -DCMAKE_FIND_ROOT_PATH="$GITHUB_WORKSPACE/.deps" \
+            -DENABLE_LIBRETRO=ON \
+            -DENABLE_QT_UI=OFF \
+            -DENABLE_SDL_FRONTEND=OFF \
+            -DENABLE_GSRUNNER=OFF \
+            -DENABLE_TESTS=OFF \
+            -DENABLE_RECOMPILER_TEST_HOOKS=OFF \
+            -DENABLE_SETCAP=OFF \
+            -DUSE_BACKTRACE=OFF \
+            -DX11_API=OFF \
+            -DWAYLAND_API=OFF \
+            -DDISABLE_ADVANCE_SIMD=TRUE \
+            -DARMSX2_ANDROID_HOST_PAGE_SIZE=0x1000 \
+            -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON
+
+      - name: Build
+        run: cmake --build build --target armsx2_libretro -j $(nproc)
+
+      - name: Package
+        run: |
+          SO=$(find build bin -name 'armsx2_libretro*.so' 2>/dev/null | head -1)
+          test -n "$SO" || { echo "armsx2_libretro.so not found"; exit 1; }
+          mkdir -p out
+          cp -v "$SO" out/armsx2_libretro_android.so
+          "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" --strip-unneeded out/armsx2_libretro_android.so
+          (cd out && zip -9 armsx2_libretro_android.so.zip armsx2_libretro_android.so)
+          ls -la out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: armsx2_libretro_android
+          path: out/armsx2_libretro_android.so.zip
+
+      - name: Publish release "fliperama"
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          NOTES="ARMSX2 libretro core for Android (arm64-v8a) with controller port 2 (armsx2_port2). Built from ${GITHUB_SHA::10}."
+          gh release delete fliperama -y --cleanup-tag || true
+          gh release create fliperama out/armsx2_libretro_android.so.zip --title "Fliperama core" --notes "$NOTES" --target "$GITHUB_SHA"
