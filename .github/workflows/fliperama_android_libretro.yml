@@ -81,7 +81,10 @@ jobs:
           mkdir -p out
           cp -v "$SO" out/armsx2_libretro_android.so
           "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" --strip-unneeded out/armsx2_libretro_android.so
-          (cd out && zip -9 armsx2_libretro_android.so.zip armsx2_libretro_android.so)
+          # The core reads its shaders and game database from resources/ at run time: they ship with it, from the
+          # same commit, so the app never pairs this core with another version's shaders (black screen).
+          cp -r bin/resources out/resources
+          (cd out && zip -9 -r armsx2_libretro_android.so.zip armsx2_libretro_android.so resources)
           ls -la out
 
       - uses: actions/upload-artifact@v4
